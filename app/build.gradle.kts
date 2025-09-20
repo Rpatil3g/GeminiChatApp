@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -15,10 +18,17 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Read the API key from local.properties
+        val properties = Properties()
+        properties.load(FileInputStream(rootProject.file("local.properties")))
+        buildConfigField("String", "OPENAI_API_KEY", "\"${properties.getProperty("OPENAI_API_KEY")}\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"${properties.getProperty("GEMINI_API_KEY")}\"")
     }
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true // <-- ADD THIS LINE
     }
 
     buildTypes {
@@ -72,4 +82,9 @@ dependencies {
 
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")
+
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    // OkHttp for logging network requests (very useful for debugging)
+    implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
 }
