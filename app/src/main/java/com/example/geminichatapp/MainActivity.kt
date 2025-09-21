@@ -1,26 +1,23 @@
-// In MainActivity.kt
 package com.example.geminichatapp
 
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
+import android.view.LayoutInflater
 import android.view.MenuItem
 import android.view.View
-
-import android.widget.AdapterView
-import android.widget.ArrayAdapter // <-- Add this line
 import android.widget.Toast
-
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat // <-- Added missing import
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.geminichatapp.databinding.ActivityMainBinding
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
 import io.noties.markwon.Markwon
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -37,17 +34,14 @@ class MainActivity : AppCompatActivity() {
     private var currentSessionId: Long = -1L
     private val chatDao by lazy { AppDatabase.getDatabase(this).chatDao() }
 
-    private val modelOptions = listOf( "gpt-4o", "gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-pro", "gemini-pro-vision" )
-    private var selectedModel = modelOptions[0]
-
-    // This factory is essential for creating the ViewModel with its dependencies
     private val viewModel: ChatViewModel by viewModels {
         object : ViewModelProvider.Factory {
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return ChatViewModel(chatDao) as T
-            }
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatViewModel(chatDao) as T
         }
     }
+
+    private val modelOptions = listOf("gpt-4o", "gemini-1.5-flash-latest", "gemini-1.5-pro-latest")
+    private var selectedModel = modelOptions[0]
 
     companion object {
         private const val RECORD_AUDIO_PERMISSION_CODE = 101
@@ -63,7 +57,6 @@ class MainActivity : AppCompatActivity() {
         setupManagers()
         setupUI()
         setupObservers()
-
         loadInitialChat()
     }
 
@@ -88,14 +81,12 @@ class MainActivity : AppCompatActivity() {
             binding = binding,
             lifecycleScope = lifecycleScope,
             chatDao = chatDao,
-            onSessionSelected = { sessionId -> loadChatSession(sessionId) },
-            onNewChat = { createNewChatSession() }
+            onAction = { action -> handleDrawerAction(action) }
         )
     }
 
     private fun setupUI() {
         drawerManager.setup()
-        setupSpinner()
 
         chatAdapter = ChatAdapter(mutableListOf(), markwon)
         binding.chatRecyclerView.apply {
@@ -106,7 +97,6 @@ class MainActivity : AppCompatActivity() {
         binding.sendButton.setOnClickListener {
             val prompt = binding.promptEditText.text.toString().trim()
             if (prompt.isNotEmpty() && currentSessionId != -1L) {
-                // --- 5. USE the selectedModel variable here ---
                 viewModel.sendMessage(currentSessionId, prompt, selectedModel)
                 binding.promptEditText.text.clear()
             }
@@ -119,20 +109,6 @@ class MainActivity : AppCompatActivity() {
             } else {
                 requestAudioPermission()
             }
-        }
-    }
-
-    private fun setupSpinner() {
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modelOptions)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.modelSpinner.adapter = adapter
-        binding.modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedModel = modelOptions[position]
-                Toast.makeText(this@MainActivity, "Model set to: $selectedModel", Toast.LENGTH_SHORT).show()
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 
@@ -150,30 +126,91 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleDrawerAction(action: DrawerAction) {
+        when (action) {
+            is DrawerAction.SessionClick -> loadChatSession(action.sessionId)
+            is DrawerAction.NewProjectClick -> showCreateProjectDialog()
+            is DrawerAction.NewStandaloneChatClick -> createNewChatSession(null)
+            is DrawerAction.AddChatInProjectClick -> createNewChatSession(action.projectId)
+            is DrawerAction.EditProjectClick -> showEditProjectDialog(action.project)
+        }
+    }
+
     private fun loadInitialChat() {
         lifecycleScope.launch {
-            val sessions = chatDao.getAllSessions().first()
+            val sessions = chatDao.getStandaloneSessions().first()
             if (sessions.isNotEmpty()) {
                 loadChatSession(sessions.first().id)
             } else {
-                createNewChatSession()
+                createNewChatSession(null)
             }
         }
     }
 
-    private fun createNewChatSession() {
+    private fun createNewChatSession(projectId: Long?) {
         lifecycleScope.launch {
-            val newSession = ChatSession(title = "New Chat")
+            val newSession = ChatSession(projectId = projectId, title = "New Chat")
             val newId = chatDao.insertSession(newSession)
             loadChatSession(newId)
         }
     }
 
     private fun loadChatSession(sessionId: Long) {
-        if (currentSessionId == sessionId && chatAdapter.itemCount > 0) return
+        if (currentSessionId == sessionId) return
         currentSessionId = sessionId
         viewModel.loadMessagesForSession(sessionId)
-        binding.toolbar.title = "Chat #${sessionId}"
+        lifecycleScope.launch {
+            val session = chatDao.getSessionById(sessionId)
+            binding.toolbar.title = session?.title ?: "Chat"
+        }
+    }
+
+    private fun showCreateProjectDialog() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_project, null)
+        val nameEditText = dialogView.findViewById<TextInputEditText>(R.id.projectNameEditText)
+        val instructionsEditText = dialogView.findViewById<TextInputEditText>(R.id.projectInstructionsEditText)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Create New Project")
+            .setView(dialogView)
+            .setPositiveButton("Create") { _, _ ->
+                val name = nameEditText.text.toString().trim()
+                val instructions = instructionsEditText.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    lifecycleScope.launch {
+                        val newProject = Project(name = name, instructions = instructions)
+                        val projectId = chatDao.insertProject(newProject)
+                        createNewChatSession(projectId)
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showEditProjectDialog(project: Project) {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_project, null)
+        val nameEditText = dialogView.findViewById<TextInputEditText>(R.id.projectNameEditText)
+        val instructionsEditText = dialogView.findViewById<TextInputEditText>(R.id.projectInstructionsEditText)
+
+        nameEditText.setText(project.name)
+        instructionsEditText.setText(project.instructions)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Edit Project")
+            .setView(dialogView)
+            .setPositiveButton("Save") { _, _ ->
+                val newName = nameEditText.text.toString().trim()
+                val newInstructions = instructionsEditText.text.toString().trim()
+                if (newName.isNotEmpty()) {
+                    lifecycleScope.launch {
+                        val updatedProject = project.copy(name = newName, instructions = newInstructions)
+                        chatDao.updateProject(updatedProject)
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {

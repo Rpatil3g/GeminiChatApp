@@ -9,7 +9,8 @@ import okio.IOException
 
 class OpenAiChatRepository(
     private val modelName: String,
-    private val chatDao: ChatDao
+    private val chatDao: ChatDao,
+    private val systemInstructions: String?
 ) : ChatRepository {
 
     override fun sendMessageStream(sessionId: Long, prompt: String): Flow<String> = channelFlow {
@@ -17,7 +18,11 @@ class OpenAiChatRepository(
             .map {
                 val role = if (it.role == Role.USER) "user" else "assistant"
                 ChatMessageJson(role = role, content = it.text)
-            }
+            }.toMutableList()
+
+        if (!systemInstructions.isNullOrBlank()) {
+            history.add(0, ChatMessageJson(role = "system", content = systemInstructions))
+        }
 
         val request = OpenAiChatRequest(model = modelName, messages = history)
         val apiKey = "Bearer ${BuildConfig.OPENAI_API_KEY}"

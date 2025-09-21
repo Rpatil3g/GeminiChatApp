@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ChatSession::class, ChatMessage::class], version = 1)
+@Database(entities = [Project::class, ChatSession::class, ChatMessage::class], version = 2) // <-- BUMP VERSION to 2
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
 
@@ -19,7 +19,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "chat_database"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration() // <-- ADD THIS. Clears DB on version change.
+                    .build()
                 INSTANCE = instance
                 instance
             }

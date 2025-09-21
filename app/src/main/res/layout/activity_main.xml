@@ -106,7 +106,12 @@
         android:layout_width="wrap_content"
         android:layout_height="match_parent"
         android:layout_gravity="start"
-        app:headerLayout="@layout/nav_header"
-        app:menu="@menu/drawer_menu" />
+        app:headerLayout="@layout/nav_header">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/drawerRecyclerView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginTop="120dp" /> </com.google.android.material.navigation.NavigationView>
 
 </androidx.drawerlayout.widget.DrawerLayout>
