@@ -5,14 +5,12 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.content
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import java.lang.Exception
+import kotlinx.coroutines.withContext
 
 class ChatViewModel(private val chatDao: ChatDao) : ViewModel() {
 
@@ -30,76 +28,72 @@ class ChatViewModel(private val chatDao: ChatDao) : ViewModel() {
         }
     }
 
-    // --- THIS FUNCTION HAS BEEN COMPLETELY REWRITTEN FOR STREAMING ---
     fun sendMessage(sessionId: Long, prompt: String, selectedModel: String) {
         if (prompt.isBlank() || sessionId == -1L) return
 
         viewModelScope.launch {
-            // 1. Save user message to the database immediately.
-            // The UI will auto-update because _chatHistory is observing the database.
-            val userMessage = ChatMessage(sessionId = sessionId, text = prompt, role = Role.USER)
-            chatDao.insertMessage(userMessage)
-
-            // Update session title if it's the first message
-            val session = chatDao.getAllSessions().first().find { it.id == sessionId }
-            if (session != null && session.title == "New Chat") {
-                session.title = prompt.take(30)
-                chatDao.updateSession(session)
-            }
-
             _isLoading.postValue(true)
 
-            // 2. Prepare for the streaming response.
-            // Add a temporary, empty message to the UI for the AI's response.
-            val currentMessages = _chatHistory.value ?: emptyList()
+            // --- BACKGROUND THREAD WORK ---
+            withContext(Dispatchers.IO) {
+                // 1. Save user message and update session title as before
+                val userMessage = ChatMessage(sessionId = sessionId, text = prompt, role = Role.USER)
+                chatDao.insertMessage(userMessage)
+
+                val session = chatDao.getAllSessions().first().find { it.id == sessionId }
+                if (session != null && session.title == "New Chat") {
+                    session.title = prompt.take(30)
+                    chatDao.updateSession(session)
+                }
+            }
+
+            // --- THIS IS THE FIX ---
+            // 2. Now on the Main thread, get the GUARANTEED FRESH list from the database
+            val freshMessages = withContext(Dispatchers.IO) {
+                chatDao.getMessagesForSession(sessionId).first()
+            }
+
+            // 3. Add the temporary AI placeholder to THIS fresh list
             val tempModelMessage = ChatMessage(sessionId = sessionId, text = "", role = Role.MODEL)
-            _chatHistory.postValue(currentMessages + tempModelMessage)
+            _chatHistory.postValue(freshMessages + tempModelMessage)
 
             val responseTextBuilder = StringBuilder()
+            val repository = RepositoryFactory.getRepository(selectedModel, chatDao)
 
-            try {
-                val generativeModel = GenerativeModel(
-                    modelName = selectedModel,
-                    apiKey = BuildConfig.GEMINI_API_KEY
-                )
-                val history = chatDao.getMessagesForSession(sessionId).first()
-                    .map { content(it.role.name.lowercase()) { text(it.text) } }
-                    .dropLast(1)
-                val chat = generativeModel.startChat(history)
-
-                // 3. Start the stream and collect chunks.
-                chat.sendMessageStream(prompt)
-                    .onEach { chunk ->
-                        // Append each chunk of text to our builder
-                        chunk.text?.let {
-                            responseTextBuilder.append(it)
-                        }
-                        // Update the text of the last message in our temporary UI list
-                        val updatedMessages = _chatHistory.value?.toMutableList()
-                        updatedMessages?.last()?.let {
-                            val updatedMessage = it.copy(text = responseTextBuilder.toString())
-                            updatedMessages[updatedMessages.size - 1] = updatedMessage
-                            _chatHistory.postValue(updatedMessages)
+            // --- The rest of the streaming logic can now proceed safely ---
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.sendMessageStream(sessionId, prompt)
+                    .catch { e ->
+                        Log.e("ChatViewModel", "Flow exception: ${e.message}", e)
+                        withContext(Dispatchers.Main) {
+                            val errorMessage = ChatMessage(sessionId = sessionId, text = "Error: ${e.message}", role = Role.MODEL)
+                            chatDao.insertMessage(errorMessage)
+                            _isLoading.postValue(false)
                         }
                     }
                     .onCompletion {
-                        // This is called when the stream is finished.
-                        val finalMessage = ChatMessage(
-                            sessionId = sessionId,
-                            text = responseTextBuilder.toString(),
-                            role = Role.MODEL
-                        )
-                        // 4. Save the single, complete message to the database.
-                        chatDao.insertMessage(finalMessage)
-                        _isLoading.postValue(false)
+                        withContext(Dispatchers.Main) {
+                            val finalMessage = ChatMessage(
+                                sessionId = sessionId,
+                                text = responseTextBuilder.toString().trim(),
+                                role = Role.MODEL
+                            )
+                            chatDao.insertMessage(finalMessage)
+                            _isLoading.postValue(false)
+                        }
                     }
-                    .collect() // This starts the collection process.
-
-            } catch (e: Exception) {
-                Log.e("ChatViewModel", "Gemini API Stream Error: ${e.message}", e)
-                val errorMessage = ChatMessage(sessionId = sessionId, text = "Error: ${e.message}", role = Role.MODEL)
-                chatDao.insertMessage(errorMessage)
-                _isLoading.postValue(false)
+                    .collect { chunk ->
+                        // UI updates must be on the Main thread
+                        withContext(Dispatchers.Main) {
+                            responseTextBuilder.append(chunk)
+                            val updatedList = _chatHistory.value?.toMutableList()
+                            updatedList?.last()?.let {
+                                val updatedMessage = it.copy(text = responseTextBuilder.toString())
+                                updatedList[updatedList.size - 1] = updatedMessage
+                                _chatHistory.postValue(updatedList)
+                            }
+                        }
+                    }
             }
         }
     }

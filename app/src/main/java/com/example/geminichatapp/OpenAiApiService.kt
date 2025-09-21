@@ -6,6 +6,9 @@ import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
+import retrofit2.http.Body
+import okhttp3.ResponseBody
+import retrofit2.http.Streaming
 
 interface OpenAiApiService {
     @Multipart
@@ -15,4 +18,11 @@ interface OpenAiApiService {
         @Part file: MultipartBody.Part,
         @Part("model") model: RequestBody
     ): WhisperResponse
+
+    @POST("v1/chat/completions")
+    @Streaming // <-- 1. Add this annotation
+    suspend fun getChatCompletionsStream( // Renamed for clarity
+        @Header("Authorization") apiKey: String,
+        @Body request: OpenAiChatRequest
+    ): ResponseBody
 }

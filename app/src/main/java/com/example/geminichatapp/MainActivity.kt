@@ -37,7 +37,7 @@ class MainActivity : AppCompatActivity() {
     private var currentSessionId: Long = -1L
     private val chatDao by lazy { AppDatabase.getDatabase(this).chatDao() }
 
-    private val modelOptions = listOf("gemini-1.5-flash-latest", "gemini-pro", "gemini-pro-vision")
+    private val modelOptions = listOf( "gpt-4o", "gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-pro", "gemini-pro-vision" )
     private var selectedModel = modelOptions[0]
 
     // This factory is essential for creating the ViewModel with its dependencies

@@ -4,6 +4,7 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
     private const val BASE_URL = "https://api.openai.com/"
@@ -14,7 +15,14 @@ object RetrofitClient {
         }
 
         val httpClient = OkHttpClient.Builder()
-            .addInterceptor(logging)
+           // .addInterceptor(logging)
+            // --- ADD THESE THREE LINES ---
+            // Increase the time to establish a connection to 60 seconds
+            .connectTimeout(60, TimeUnit.SECONDS)
+            // Increase the time to read data from the server to 60 seconds
+            .readTimeout(60, TimeUnit.SECONDS)
+            // Increase the time to write data to the server to 60 seconds
+            .writeTimeout(60, TimeUnit.SECONDS)
             .build()
 
         val retrofit = Retrofit.Builder()
